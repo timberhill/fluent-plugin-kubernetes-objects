@@ -1,36 +1,51 @@
-FROM registry.access.redhat.com/ubi8/ruby-27
+FROM ruby:2.5.1-slim
+
+LABEL maintainer="Splunk Inc. <DataEdge@splunk.com>"
+LABEL Description="Splunk Connect for Kubernetes docker image" Vendor="Splunk Inc."
 
 ARG VERSION
 
-LABEL name="Splunk Connect for Kubernetes Objects container" \
-      maintainer="DataEdge@splunk.com" \
-      vendor="Splunk Inc." \
-      version=${VERSION} \
-      release=${VERSION} \
-      summary="Splunk Connect for Kubernetes Objects container" \
-      description="Splunk Connect for Kubernetes Objects container"
+# fluent-plugin-kubernetes-objects
+ENV KO_VERSION=1.1.2
+# fluent-plugin-k8s-metrics-agg
+ENV KMA_VERSION=1.1.2
+# fluent-plugin-kubernetes-metrics
+ENV KM_VERSION=1.1.2
+# fluent-plugin-splunk-hec
+ENV SH_VERSION=1.1.0
 
-ENV VERSION=${VERSION}
-ENV FLUENT_USER fluent
+# skip runtime bundler installation
+ENV FLUENTD_DISABLE_BUNDLER_INJECTION 1
 
-USER root
+#COPY *.gem /tmp/
 
-COPY *.gem /tmp/
-COPY licenses /licenses
+RUN set -e \
+ && apt-get update \
+ && apt-get upgrade -y \
+ && apt-get install -y --no-install-recommends libjemalloc1 jq \
+ && buildDeps="make gcc g++ wget" \
+ && apt-get install -y --no-install-recommends $buildDeps \
+ && gem install -N fluentd -v "1.4.0" \
+ && gem install -N fluent-plugin-prometheus -v "1.3.0" \
+ && gem install -N fluent-plugin-jq -v "0.5.1" \
+ && gem install -N oj -v "3.7.9" \
+ && gem install -N fluent-plugin-splunk-hec:${SH_VERSION} \
+ && gem install -N fluent-plugin-kubernetes-objects:${KO_VERSION} \
+# && gem install -N /tmp/*.gem \
+ && dpkgArch="$(dpkg --print-architecture | awk -F- '{ print $NF }')" \
+# && wget -O /usr/bin/dumb-init https://github.com/Yelp/dumb-init/releases/download/v1.2.1/dumb-init_1.2.1_$dpkgArch \
+# && chmod +x /usr/bin/dumb-init \
+ && apt-get install dumb-init \
+ && apt-get purge -y --auto-remove \
+                  -o APT::AutoRemove::RecommendsImportant=false \
+                  $buildDeps \
+ && rm -rf /var/lib/apt/lists/* \
+ && rm -rf /tmp/* /var/tmp/* $GEM_HOME/cache/*.gem \
+ && mkdir -p /fluentd/etc
 
-RUN dnf install -y jq
+ # See https://packages.debian.org/stretch/amd64/libjemalloc1/filelist
+#ENV LD_PRELOAD "/usr/lib/x86_64-linux-gnu/libjemalloc.so.1"
+COPY entrypoint.sh /fluentd/entrypoint.sh
 
-COPY Gemfile* ./
-RUN yum update -y \
-   && yum remove -y nodejs npm \
-   && gem install bundler \
-   && gem unpack /tmp/*.gem --target gem \
-   && bundle install 
-
-RUN groupadd -r $FLUENT_USER && \
-  useradd -r -g $FLUENT_USER $FLUENT_USER && \
-  mkdir -p /fluentd/log fluentd/etc /fluentd/plugins &&\
-  chown -R $FLUENT_USER /fluentd && chgrp -R $FLUENT_USER /fluentd
-
-USER $FLUENT_USER
-CMD bundle exec fluentd -c /fluentd/etc/fluent.conf
+ENTRYPOINT ["/bin/bash", "/fluentd/entrypoint.sh"]
+CMD ["-h"]
